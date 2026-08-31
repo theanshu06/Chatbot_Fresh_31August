@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic-settings
+python-dotenv
+ollama>=0.6.0
+chromadb
+pypdf
+psycopg2-binary
+pandas
+requests
+beautifulsoup4
