@@ -89,15 +89,27 @@ def detect(conn_params: dict, tables: list[dict]) -> list[dict]:
         except Exception:
             samples[t["source_id"]] = {}
 
+    rows = {t["source_id"]: max(t.get("row_count") or 0, 1) for t in tables}
+
+    def _keyish(sid: str, col: str, values: set) -> bool:
+        # looks like a key: (nearly) unique within its table
+        return len(values) / rows[sid] >= settings.REL_KEY_UNIQUENESS
+
     for i in range(len(tables)):
         for j in range(i + 1, len(tables)):
             a, b = tables[i], tables[j]
             joins = []
             for ca, va in samples.get(a["source_id"], {}).items():
-                if not va:
+                if len(va) < settings.REL_MIN_DISTINCT:
                     continue
                 for cb, vb in samples.get(b["source_id"], {}).items():
-                    if not vb or fam.get((a["source_id"], ca)) != fam.get((b["source_id"], cb)):
+                    if len(vb) < settings.REL_MIN_DISTINCT:
+                        continue
+                    if fam.get((a["source_id"], ca)) != fam.get((b["source_id"], cb)):
+                        continue
+                    # at least one side must look like a key, else it's two
+                    # category columns overlapping by coincidence
+                    if not (_keyish(a["source_id"], ca, va) or _keyish(b["source_id"], cb, vb)):
                         continue
                     inter = len(va & vb)
                     if not inter:
@@ -105,6 +117,9 @@ def detect(conn_params: dict, tables: list[dict]) -> list[dict]:
                     containment = inter / min(len(va), len(vb))
                     if containment >= settings.REL_VALUE_OVERLAP_MIN:
                         joins.append({"left": ca, "right": cb, "overlap": round(containment, 2)})
+            # Many candidate pairs still means noise — trust only identical names.
+            if len(joins) > 2:
+                joins = [j for j in joins if j["left"] == j["right"]]
             if joins:
                 note = "matched on value overlap: " + ", ".join(
                     f"{j['left']}~{j['right']} ({int(j['overlap'] * 100)}%)" for j in joins

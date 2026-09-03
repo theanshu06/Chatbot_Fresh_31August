@@ -41,24 +41,40 @@ class Settings(BaseSettings):
     TABLE_CARD_VALUES_MAX_CHARS: int = 600
 
     # Vector store
+    # Everything the app persists lives under here. Point it at a drive with
+    # free space (e.g. CHROMA_DIR=D:/chatbot_fresh_store) — a full disk corrupts
+    # the vector store.
     CHROMA_DIR: Path = Path.home() / ".chatbot_fresh_store"
     COLLECTION_NAME: str = "ingested_documents"
 
-    # Where per-table Postgres connection params are cached so the text-to-SQL
-    # path can reconnect at question time. Holds credentials in PLAINTEXT — this
+    # Cached Postgres connection params (so text-to-SQL can reconnect at question
+    # time) and table relationships. Both default to a file under CHROMA_DIR; set
+    # explicitly to override. DB_CONN_FILE holds credentials in PLAINTEXT — this
     # is a local single-user tool; delete the file to revoke.
-    DB_CONN_FILE: Path = Path.home() / ".chatbot_fresh_store" / "db_connections.json"
+    DB_CONN_FILE: Path | None = None
+    DB_REL_FILE: Path | None = None
 
-    # Join relationships between ingested tables. Only "confirmed" ones are fed
-    # to the SQL model; "suggested" ones wait for the user to confirm them.
-    DB_REL_FILE: Path = Path.home() / ".chatbot_fresh_store" / "db_relationships.json"
     REL_VALUE_OVERLAP_MIN: float = 0.8  # value-containment needed to suggest a join
     REL_SAMPLE_VALUES: int = 500  # distinct values sampled per column for overlap
+    REL_MIN_DISTINCT: int = 2  # skip literal-constant columns; the keyish check
+    #                            below is what actually filters category columns
+    REL_KEY_UNIQUENESS: float = 0.9  # a join needs at least one side to look like a
+    #                                  key: distinct/rows >= this. Kills category-
+    #                                  vs-category matches (status~status, etc.)
 
     # Chunking
     CHUNK_CHAR_BUDGET: int = 3000
     PAGES_PER_CHUNK: int = 2  # PDF
     ROWS_PER_CHUNK: int = 20  # Database
+
+    # Database ingestion speed vs. fallback richness.
+    # The text-to-SQL path answers from a live query and NEVER reads embedded
+    # rows — it only needs the schema, the table card, and the sample rows. So by
+    # default we skip embedding row chunks entirely: ingest drops from minutes to
+    # seconds. Set EMBED_DB_ROWS=true to also embed rows (used only by the RAG
+    # fallback when SQL generation fails, and by the "Show ingested" view).
+    EMBED_DB_ROWS: bool = False
+    DB_SAMPLE_ROWS: int = 20  # real rows stored per table as few-shot context
 
     # Website crawl limits — a crawl with no cap could wander an entire site
     # indefinitely, so both a page count and a depth ceiling are mandatory.
@@ -74,6 +90,13 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+
+    def model_post_init(self, __context) -> None:
+        # Default the sidecar files to live alongside the vector store.
+        if self.DB_CONN_FILE is None:
+            self.DB_CONN_FILE = self.CHROMA_DIR / "db_connections.json"
+        if self.DB_REL_FILE is None:
+            self.DB_REL_FILE = self.CHROMA_DIR / "db_relationships.json"
 
 
 settings = Settings()

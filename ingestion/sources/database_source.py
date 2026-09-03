@@ -137,7 +137,7 @@ def get_schema(conn_params: dict, table_name: str) -> list[dict]:
     return [{"name": r[0], "type": r[1], "nullable": r[2] == "YES"} for r in rows]
 
 
-def sample_rows(conn_params: dict, table_name: str, n: int = 5) -> list[dict]:
+def sample_rows(conn_params: dict, table_name: str, n: int = 20) -> list[dict]:
     """A handful of real rows, used as few-shot context for SQL generation."""
     conn = _connect(conn_params)
     try:
@@ -148,8 +148,9 @@ def sample_rows(conn_params: dict, table_name: str, n: int = 5) -> list[dict]:
     return df.fillna("").astype(str).to_dict(orient="records")
 
 
-def build_table_card(conn_params: dict, table_name: str, schema: list[dict]) -> str:
+def build_table_card(conn_params: dict, table_name: str, schema: list[dict]) -> tuple[str, int]:
     """Human-readable summary of a table: row count, and per-column stats.
+    Returns (card_text, total_row_count).
 
     For low-cardinality text columns the distinct values are listed in full —
     that alone answers most "which / what values / how many kinds" questions
@@ -198,7 +199,7 @@ def build_table_card(conn_params: dict, table_name: str, schema: list[dict]) -> 
     finally:
         conn.close()
 
-    return "\n".join(lines)
+    return "\n".join(lines), total
 
 
 def run_readonly_query(conn_params: dict, query: str) -> tuple[list[str], list[list]]:

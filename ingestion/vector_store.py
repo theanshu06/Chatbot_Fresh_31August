@@ -21,6 +21,28 @@ def get_collection():
     return chroma_client.create_collection(settings.COLLECTION_NAME, metadata={"hnsw:space": "cosine"})
 
 
+def _recover_if_corrupt() -> None:
+    """ChromaDB's compaction runs in a background thread after a write returns;
+    a hard kill (not Ctrl+C) mid-compaction can leave the metadata segment
+    unable to apply its log, and every later call then throws InternalError.
+    On startup, probe the store and, if it's wedged, drop + recreate the
+    collection. Ingested data is lost but re-ingest is cheap — better than a
+    permanently broken store.
+    """
+    try:
+        get_collection().count()
+    except chromadb.errors.InternalError:
+        try:
+            chroma_client.delete_collection(settings.COLLECTION_NAME)
+        except Exception:
+            pass
+        chroma_client.create_collection(settings.COLLECTION_NAME, metadata={"hnsw:space": "cosine"})
+        print("[vector_store] recovered a corrupted Chroma collection — re-ingest your sources")
+
+
+_recover_if_corrupt()
+
+
 def embed(text: str) -> list[float]:
     # nomic-embed-text hard-caps input at ~2048 tokens. The legacy
     # ollama.embeddings() endpoint ERRORS on longer input; ollama.embed() with
@@ -126,9 +148,16 @@ def search(query: str, top_k: int = 5, source_type: str | None = None) -> list[d
     ]
 
 
+def delete_source_chunks(source_id: str) -> None:
+    """Remove just the chunks for a source — not its cached credentials or
+    relationships. Used to clear a table before re-ingesting it.
+    """
+    get_collection().delete(where={"source_id": source_id})
+
+
 def delete_source(source_id: str) -> int:
-    """Remove every chunk belonging to one ingested source. Returns how many
-    chunks were deleted.
+    """Remove every chunk belonging to one ingested source, plus its cached
+    credentials and relationships. Returns how many chunks were deleted.
     """
     collection = get_collection()
     before = collection.count()

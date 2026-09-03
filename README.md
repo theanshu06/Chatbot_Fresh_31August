@@ -121,23 +121,23 @@ be filtered and traced back.
 
 ### 3.3 Database  (`ingestion/sources/database_source.py`) — Postgres
 
-This path does **more** than the others, because a database question needs to be
-answered by *querying*, not by *reading*.
+This path is different from the others: **your rows are never copied into the
+vector store.** A database question is answered by running a live query, so
+ingestion here is really *registration + profiling* — it records the connection
+and a description of each table. The data stays in Postgres.
 
 At ingest time, for each selected table:
 
-1. **Row chunks** — pull up to `DB_TABLE_ROW_LIMIT` (5000) rows and format them
-   **20 rows per chunk** (`ROWS_PER_CHUNK`), one row per line
-   (`Row N: col=val, col=val …`). Kept for transparency and as a fallback
-   context source. Tagged `kind: "row_chunk"`.
-2. **Schema** — column names, types, and nullability, read from
-   `information_schema.columns`.
-3. **Table card** (`kind: "table_card"`) — a compact, human-readable summary:
+1. **Schema** — column names, types, and nullability, from
+   `information_schema.columns`. The SQL model needs the exact names to write
+   valid SQL.
+2. **Table card** (`kind: "table_card"`) — a compact, human-readable summary:
    - total row count,
    - per column: number of distinct values, number of NULLs,
    - for **numeric / date / time** columns: the `min .. max` range,
    - for **low-cardinality text** columns (≤ `TABLE_CARD_MAX_DISTINCT` = 50
-     distinct values): **the full list of values**.
+     distinct values): **the full list of values** (capped at
+     `TABLE_CARD_VALUES_MAX_CHARS`).
 
    Example card:
    ```
@@ -149,16 +149,21 @@ At ingest time, for each selected table:
      - plant_date (date): 118 distinct, 0 null, range 2026-05-05 .. 2026-08-31
      - shift_name (character varying): 4 distinct, 0 null, values: [, A, B, C]
    ```
-   This single chunk answers most *"which / what values / how many kinds"*
-   questions on its own, and is the fallback when SQL generation fails.
-4. **Sample rows** — 5 real rows, stored as few-shot context for the SQL model.
-5. **Connection cache** — the Postgres connection parameters (host, port, db,
-   user, **password**) are saved to
-   `~/.chatbot_fresh_store/db_connections.json`, keyed by `source_id`, so the
-   text-to-SQL path can **reconnect at question time**. See
-   [Security](#9-security-notes).
-6. **Relationship detection** — after every table in the batch is stored, the
-   system looks for joins between them (see [§3.4](#34-table-relationships)).
+   The card grounds the SQL model (it sees that `shift_name` is `A/B/C`, not
+   `Morning/Night`) and is also the answer source when SQL generation fails.
+3. **Sample rows** — `DB_SAMPLE_ROWS` (20) real rows, stored as few-shot context.
+4. **Connection cache** — the Postgres parameters (host, port, db, user,
+   **password**) are saved to `~/.chatbot_fresh_store/db_connections.json`,
+   keyed by `source_id`, so the text-to-SQL path can **reconnect at question
+   time**. See [Security](#9-security-notes).
+5. **Relationship detection** — joins between the ingested tables
+   (see [§3.4](#34-table-relationships)).
+6. **Row chunks — optional, off by default** (`EMBED_DB_ROWS`). When enabled,
+   up to `DB_TABLE_ROW_LIMIT` (5000) rows are formatted 20-per-chunk
+   (`ROWS_PER_CHUNK`) and embedded, tagged `kind: "row_chunk"`. **The text-to-SQL
+   path never reads these** — they only feed the RAG fallback and the "Show
+   ingested" view. Embedding them is the slow part of database ingest (minutes
+   vs. seconds), so it is skipped unless you turn it on.
 
 ### 3.4 Table relationships  (`ingestion/relationship_detect.py`, `db_relationships.py`)
 
@@ -175,12 +180,15 @@ discovered and, where uncertain, confirmed by the user.
 2. **Value-overlap heuristic** — for every pair of same-type **text / date /
    time** columns across the two tables, sample up to `REL_SAMPLE_VALUES` (500)
    distinct values from each and measure **containment**
-   `|A ∩ B| / min(|A|, |B|)`. Above `REL_VALUE_OVERLAP_MIN` (0.8) the columns
-   probably mean the same thing (e.g. `attendance_date` vs `plant_date` at 96%,
-   `shift_name` vs `shift_name` at 100%). Stored as **`suggested`**.
-   *Integer columns are excluded* — small-integer ranges collide by coincidence
-   far too often (`id` vs `total_manpower`); real integer keys are almost always
-   declared FKs anyway.
+   `|A ∩ B| / min(|A|, |B|)`. Above `REL_VALUE_OVERLAP_MIN` (0.8) *and* with at
+   least one side looking like a key (`distinct / rows ≥ REL_KEY_UNIQUENESS`,
+   0.9), it's stored as **`suggested`** — e.g. `khalas.client_name` ⊆
+   `clients.name` (unique) at 100%.
+   Guards against noise: **integer columns are excluded** (small-int ranges
+   collide by chance; real int keys are declared FKs); the **key-uniqueness**
+   check rejects category-vs-category matches (`status` = `status`); and if a
+   table pair yields more than two candidate columns, only identical names are
+   kept.
 
 **In the UI** ("Table relationships" panel) the user sees every suggestion and
 clicks **Confirm** or **Dismiss**, and can **add** a join manually
@@ -316,8 +324,8 @@ In that case `chat.py` answers with the **normal RAG prompt** over the table's
 | **PDF chunking** | Fixed **2 pages/chunk** | — | Natural document unit; keeps adjacent pages together; predictable size. |
 | **Website chunking** | **Paragraph-packing** to a 3000-char budget | — | Never splits a paragraph; preserves semantic units; keeps chunks embed-sized. |
 | **Website crawl** | **BFS**, same-domain, capped by pages + depth | — | Predictable, bounded, can't run away; BFS reaches the most-linked (usually most important) pages first. |
-| **DB row chunking** | **20 rows/chunk**, row-per-line | — | Consistent structure for the embedder; used for transparency + fallback only. |
-| **DB summary** | **Table card** (counts, ranges, distinct-value lists) computed with SQL aggregates | — | Answers "which/how many/what values" without an LLM; the safety net when SQL fails. |
+| **DB row chunking** | **20 rows/chunk**, row-per-line — *disabled by default* | — | Text-to-SQL never reads these; only the RAG fallback does. Off by default so DB ingest takes seconds, not minutes (`EMBED_DB_ROWS`). |
+| **DB summary** | **Table card** (counts, ranges, distinct-value lists) computed with SQL aggregates | — | The whole input to the SQL model (with schema + 20 sample rows); answers "which/how many/what values" without an LLM; the safety net when SQL fails. |
 | **Table-join discovery** | declared **foreign keys** + a **value-overlap** heuristic (Jaccard-style containment on sampled distinct values; text/date/time only) | — | FKs are exact but often absent in real data; value overlap catches `plant_date`↔`reading_date`. No model needed — it's set arithmetic. Suggestions require user confirmation before the SQL model sees them. |
 | **SQL generation** | `qwen2.5-coder:3b` (Ollama) | ~1.9 GB | Code-tuned model, current and maintained, strong at PostgreSQL, similar speed to a 3 B general model on CPU. Can also emit `INSUFFICIENT`. Chosen over a 7 B coder (too slow on CPU) and over SQL-only models like `sqlcoder` (older, inflexible). |
 | **Answer / result phrasing** | `llama3.2:3b` (Ollama) | ~2.0 GB | Reliable at "answer using only this context", clean prose, fast on CPU. Used for both the RAG answer and phrasing SQL results — the coder model **hallucinated** on the narration step (invented numbers), so the two jobs are split by strength. |
@@ -392,9 +400,12 @@ The frontend talks to `http://localhost:8100` by default (override with
 | `SQL_STATEMENT_TIMEOUT_MS` | `5000` | per-query timeout |
 | `CHUNK_CHAR_BUDGET` | `3000` | website chunk size |
 | `PAGES_PER_CHUNK` / `ROWS_PER_CHUNK` | `2` / `20` | PDF / DB chunk size |
+| `EMBED_DB_ROWS` | `false` | also embed DB row chunks (slow; RAG-fallback only) |
+| `DB_SAMPLE_ROWS` | `20` | real rows stored per table as SQL few-shot context |
 | `TABLE_CARD_MAX_DISTINCT` | `50` | list values below this cardinality |
 | `REL_VALUE_OVERLAP_MIN` | `0.8` | value-containment needed to suggest a table join |
 | `REL_SAMPLE_VALUES` | `500` | distinct values sampled per column for overlap |
+| `REL_KEY_UNIQUENESS` | `0.9` | one join side must be ≥ this unique (distinct/rows) |
 | `CRAWL_MAX_PAGES_*` / `CRAWL_MAX_DEPTH_*` | 20/100, 2/5 | crawl caps |
 | `CHROMA_DIR` | `~/.chatbot_fresh_store` | vector store location |
 | `DB_CONN_FILE` | `<CHROMA_DIR>/db_connections.json` | cached Postgres credentials |
@@ -449,7 +460,8 @@ The frontend talks to `http://localhost:8100` by default (override with
 
 - **Speed.** Ollama here is **CPU-only**: expect **1–2 minutes** per answer (model
   load + generation). Keep prompts small; the model stays resident for 30 min
-  between questions.
+  between questions. Database *ingest* is fast (seconds) because rows aren't
+  embedded by default; turning on `EMBED_DB_ROWS` makes it take minutes.
 - **Scanned PDFs** (no text layer) can't be ingested — no OCR.
 - **Postgres only** for the database source.
 - **Small local models** make mistakes: SQL for complex multi-JOIN analytics may
@@ -457,10 +469,15 @@ The frontend talks to `http://localhost:8100` by default (override with
   that the SQL model tends to *degrade* across retries as the error context grows
   — a hard aggregation over a many-to-many join (fan-out double counting) is near
   the edge of what a 3B model does reliably.
-- **Relationship detection is best-effort.** Declared foreign keys are exact;
-  the value-overlap heuristic only *suggests* (integer keys aren't guessed at
-  all). Cross-table questions work best once you've confirmed the right joins in
-  the "Table relationships" panel.
+- **Relationship detection is best-effort and needs data volume.** Declared
+  foreign keys are exact; the value-overlap heuristic only *suggests*, needs a
+  few dozen+ rows per table to have signal, and doesn't guess integer keys.
+  Cross-table questions work best once you've confirmed (or manually added) the
+  right joins in the "Table relationships" panel.
+- **Stopping the backend:** use Ctrl+C. Force-killing the process (closing the
+  window, `kill -9`) while ChromaDB is compacting in the background can corrupt
+  the local store; the app self-heals on next start by recreating an empty
+  collection, but you'll have to re-ingest.
 - The **table card** lists distinct values only for columns with ≤ 50 distinct
   values; a novel aggregate the card didn't pre-compute still needs the SQL path.
 - Answer quality on messy source data is bounded by the data (e.g. a `plant_logs`

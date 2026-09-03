@@ -115,12 +115,20 @@ export default function DatabasePanel({ onIngested }) {
       {ingestError && <div className="error">{ingestError}</div>}
       {result && (
         <div className="result">
-          <div>total chunks stored: {result.total_chunks}</div>
           <ul>
             {result.tables_ingested.map((t) => (
-              <li key={t.table}>{t.table} — {t.chunks} chunks ({t.total_rows} rows)</li>
+              <li key={t.table}>
+                {t.table} — profiled ({t.total_rows.toLocaleString()} rows
+                {t.chunks > 0 ? `, ${t.chunks} row chunks embedded` : ", schema + card only"})
+              </li>
             ))}
           </ul>
+          {result.relationships?.length > 0 && (
+            <div className="muted">
+              {result.relationships.length} relationship
+              {result.relationships.length === 1 ? "" : "s"} detected — review them in Table relationships.
+            </div>
+          )}
         </div>
       )}
     </div>

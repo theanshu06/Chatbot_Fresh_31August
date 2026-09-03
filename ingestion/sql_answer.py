@@ -68,7 +68,7 @@ def _tables_block(tables: list[dict], full_sids: set[str]) -> str:
         lines = [t["card"]]
         if t.get("sample_rows"):
             lines.append("Sample rows:")
-            for r in t["sample_rows"][:5]:
+            for r in t["sample_rows"]:
                 lines.append("  " + ", ".join(f"{k}={v}" for k, v in r.items()))
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
