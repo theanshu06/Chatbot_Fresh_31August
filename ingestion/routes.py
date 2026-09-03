@@ -1,10 +1,11 @@
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
-from ingestion import chat, pipeline, vector_store
+from ingestion import chat, db_relationships, pipeline, vector_store
 from ingestion.models import (
     ChatRequest,
     DatabaseConnectRequest,
     DatabaseIngestRequest,
+    RelationshipRequest,
     SearchRequest,
     WebsiteIngestRequest,
 )
@@ -82,6 +83,61 @@ def chat_endpoint(req: ChatRequest):
         return chat.answer(req.question, top_k=req.top_k, source_type=req.source_type)
     except Exception as e:
         raise HTTPException(500, f"Chat failed: {e}")
+
+
+@router.get("/api/database/tables-ingested")
+def database_tables_ingested():
+    """Every ingested database table with its column list — powers the
+    "add relationship" form in the UI.
+    """
+    return {
+        "tables": [
+            {"source_id": t["source_id"], "label": t["label"],
+             "columns": [c["name"] for c in t["schema"]], "row_count": t["row_count"]}
+            for t in vector_store.get_database_tables()
+        ]
+    }
+
+
+@router.get("/api/relationships")
+def list_relationships():
+    """Every known join relationship between ingested tables (confirmed +
+    suggested). Only confirmed ones are shown to the SQL model.
+    """
+    return {"relationships": db_relationships.list_all()}
+
+
+@router.post("/api/relationships")
+def add_relationship(req: RelationshipRequest):
+    """Declare a join manually. Stored as confirmed."""
+    rel = db_relationships.upsert(
+        {
+            "left_source_id": req.left_source_id,
+            "right_source_id": req.right_source_id,
+            "left_table": req.left_table,
+            "right_table": req.right_table,
+            "joins": [{"left": j.left, "right": j.right} for j in req.joins],
+            "source": "user",
+            "status": "confirmed",
+            "note": req.note,
+        }
+    )
+    return {"relationship": rel}
+
+
+@router.post("/api/relationships/{rel_id}/confirm")
+def confirm_relationship(rel_id: str):
+    rel = db_relationships.confirm(rel_id)
+    if rel is None:
+        raise HTTPException(404, f"No relationship with id {rel_id!r}")
+    return {"relationship": rel}
+
+
+@router.delete("/api/relationships/{rel_id}")
+def delete_relationship(rel_id: str):
+    if not db_relationships.delete(rel_id):
+        raise HTTPException(404, f"No relationship with id {rel_id!r}")
+    return {"deleted": rel_id}
 
 
 @router.get("/api/ingested")

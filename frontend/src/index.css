@@ -335,3 +335,34 @@ select {
   font-size: 0.82rem;
   color: #c3c7cf;
 }
+
+/* --- Relationships panel --- */
+.rel-group { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+
+.rel-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #12141a;
+  border: 1px solid #262a33;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.rel-join-col { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+.rel-join {
+  flex: 1;
+  font-family: "SF Mono", Consolas, monospace;
+  font-size: 0.8rem;
+  color: #e6e8eb;
+  word-break: break-word;
+}
+.rel-row button { align-self: center; padding: 5px 10px; font-size: 0.8rem; }
+
+.rel-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 16px;
+  border-top: 1px solid #262a33;
+  padding-top: 14px;
+}

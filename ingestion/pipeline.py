@@ -6,7 +6,7 @@ source type — routes.py just calls into here.
 import json
 from urllib.parse import urlparse
 
-from ingestion import db_connections, vector_store
+from ingestion import db_connections, relationship_detect, vector_store
 from ingestion.sources import database_source, pdf_source, website_source
 
 
@@ -39,6 +39,7 @@ def ingest_database(conn_params: dict, tables: list[str] | None) -> dict:
 
     ingested = []
     total_chunks = 0
+    schemas = []  # for relationship detection after every table is stored
     for table_name in target_tables:
         chunks, total_rows = database_source.table_to_chunks(conn_params, table_name)
         if not chunks:
@@ -72,10 +73,29 @@ def ingest_database(conn_params: dict, tables: list[str] | None) -> dict:
         # Cache the connection so the text-to-SQL path can reconnect at question time.
         db_connections.save(source_id, conn_params)
 
+        schemas.append({"source_id": source_id, "label": table_name, "schema": schema})
         total_chunks += count + 1
         ingested.append({"table": table_name, "chunks": count, "total_rows": total_rows})
 
     if not ingested:
         raise ValueError("None of the requested tables had any rows to ingest.")
 
-    return {"tables_ingested": ingested, "total_chunks": total_chunks}
+    # Detect join relationships across every table in THIS database ingested so
+    # far (not just this batch), so a table added later links to earlier ones.
+    known = {s["source_id"] for s in schemas}
+    for t in vector_store.get_database_tables():
+        if t["source_id"] in known:
+            continue
+        prior = db_connections.get(t["source_id"]) or {}
+        if prior.get("host") == conn_params.get("host") and prior.get("dbname") == conn_params.get("dbname"):
+            schemas.append({"source_id": t["source_id"], "label": t["label"], "schema": t["schema"]})
+    try:
+        relationships = relationship_detect.detect(conn_params, schemas)
+    except Exception:
+        relationships = []
+
+    return {
+        "tables_ingested": ingested,
+        "total_chunks": total_chunks,
+        "relationships": relationships,
+    }

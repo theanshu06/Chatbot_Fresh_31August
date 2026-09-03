@@ -15,6 +15,14 @@ function SqlTrace({ sql }) {
         model={sql.model} · tables offered: {sql.tables_offered.join(", ") || "(none)"} ·{" "}
         {sql.attempts.length} attempt{sql.attempts.length === 1 ? "" : "s"}
       </div>
+      {sql.relationships_used && sql.relationships_used.length > 0 && (
+        <div className="muted">
+          joins given to the model:
+          {sql.relationships_used.map((r, i) => (
+            <div key={i}><code>{r}</code></div>
+          ))}
+        </div>
+      )}
       {sql.failure_reason && (
         <div className="error">SQL path gave up: {sql.failure_reason} — answered from the table card instead.</div>
       )}

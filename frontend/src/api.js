@@ -64,3 +64,23 @@ export function search(query, topK, sourceType) {
     body: JSON.stringify({ query, top_k: topK, source_type: sourceType || null }),
   });
 }
+
+export function getIngestedDbTables() {
+  return request("/api/database/tables-ingested");
+}
+
+export function getRelationships() {
+  return request("/api/relationships");
+}
+
+export function addRelationship(rel) {
+  return request("/api/relationships", { method: "POST", body: JSON.stringify(rel) });
+}
+
+export function confirmRelationship(relId) {
+  return request(`/api/relationships/${encodeURIComponent(relId)}/confirm`, { method: "POST" });
+}
+
+export function deleteRelationship(relId) {
+  return request(`/api/relationships/${encodeURIComponent(relId)}`, { method: "DELETE" });
+}

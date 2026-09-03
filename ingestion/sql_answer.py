@@ -19,7 +19,7 @@ import time
 import ollama
 import psycopg2
 
-from ingestion import db_connections
+from ingestion import db_connections, db_relationships
 from ingestion.config import settings
 from ingestion.sources import database_source
 
@@ -61,6 +61,21 @@ def _tables_block(tables: list[dict]) -> str:
                 lines.append("  " + ", ".join(f"{k}={v}" for k, v in r.items()))
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
+
+
+def _rel_condition(rel: dict) -> str:
+    """`plant_logs.plant_date = compressor_readings.reading_date AND ...`"""
+    return " AND ".join(
+        f"{rel['left_table']}.{j['left']} = {rel['right_table']}.{j['right']}" for j in rel["joins"]
+    )
+
+
+def _relationships_block(rels: list[dict]) -> str:
+    if not rels:
+        return ""
+    lines = ["Known joins between these tables (use these ON conditions for questions that span tables):"]
+    lines += [f"- {_rel_condition(r)}" for r in rels]
+    return "\n".join(lines) + "\n\n"
 
 
 def _strip_fences(text: str) -> str:
@@ -124,6 +139,7 @@ def try_sql(question: str, tables: list[dict], primary_source_id: str) -> dict:
     trace: dict = {
         "model": settings.SQL_MODEL,
         "tables_offered": [t["label"] for t in tables],
+        "relationships_used": [],
         "attempts": [],
         "final_sql": None,
         "columns": None,
@@ -151,7 +167,14 @@ def try_sql(question: str, tables: list[dict], primary_source_id: str) -> dict:
     ] or [primary]
     trace["tables_offered"] = [t["label"] for t in join_tables]
 
-    user_prompt = f"{_tables_block(join_tables)}\n\n---\n\nQuestion: {question}"
+    # Confirmed join relationships between the offered tables — the only hint the
+    # model gets about how to connect them.
+    offered_sids = {t["source_id"] for t in join_tables}
+    rels = db_relationships.for_source_ids(offered_sids, only_confirmed=True)
+    rel_block = _relationships_block(rels)
+    trace["relationships_used"] = [_rel_condition(r) for r in rels]
+
+    user_prompt = f"{_tables_block(join_tables)}\n\n{rel_block}---\n\nQuestion: {question}"
     messages = [
         {"role": "system", "content": _SQL_SYSTEM},
         {"role": "user", "content": user_prompt},

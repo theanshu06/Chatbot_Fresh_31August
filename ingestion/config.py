@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     # is a local single-user tool; delete the file to revoke.
     DB_CONN_FILE: Path = Path.home() / ".chatbot_fresh_store" / "db_connections.json"
 
+    # Join relationships between ingested tables. Only "confirmed" ones are fed
+    # to the SQL model; "suggested" ones wait for the user to confirm them.
+    DB_REL_FILE: Path = Path.home() / ".chatbot_fresh_store" / "db_relationships.json"
+    REL_VALUE_OVERLAP_MIN: float = 0.8  # value-containment needed to suggest a join
+    REL_SAMPLE_VALUES: int = 500  # distinct values sampled per column for overlap
+
     # Chunking
     CHUNK_CHAR_BUDGET: int = 3000
     PAGES_PER_CHUNK: int = 2  # PDF

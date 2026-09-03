@@ -8,7 +8,7 @@ import json
 import chromadb
 import ollama
 
-from ingestion import db_connections
+from ingestion import db_connections, db_relationships
 from ingestion.config import settings
 
 chroma_client = chromadb.PersistentClient(path=str(settings.CHROMA_DIR))
@@ -127,6 +127,7 @@ def delete_source(source_id: str) -> int:
     before = collection.count()
     collection.delete(where={"source_id": source_id})
     db_connections.forget(source_id)  # drop any cached Postgres credentials
+    db_relationships.forget_source(source_id)  # drop joins that referenced this table
     return before - collection.count()
 
 
@@ -137,6 +138,7 @@ def clear_all() -> int:
     chroma_client.delete_collection(settings.COLLECTION_NAME)
     get_collection()  # recreate an empty collection so later calls still work
     settings.DB_CONN_FILE.unlink(missing_ok=True)  # forget all cached DB credentials
+    settings.DB_REL_FILE.unlink(missing_ok=True)  # forget all table relationships
     return removed
 
 

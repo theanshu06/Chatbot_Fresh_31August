@@ -3,12 +3,14 @@ import { checkHealth } from "./api.js";
 import PdfPanel from "./components/PdfPanel.jsx";
 import WebsitePanel from "./components/WebsitePanel.jsx";
 import DatabasePanel from "./components/DatabasePanel.jsx";
+import RelationshipsPanel from "./components/RelationshipsPanel.jsx";
 import ChatPanel from "./components/ChatPanel.jsx";
 import ShowIngested from "./components/ShowIngested.jsx";
 
 export default function App() {
   const [health, setHealth] = useState(null);
   const showRef = useRef(null);
+  const relRef = useRef(null);
 
   useEffect(() => {
     checkHealth()
@@ -16,8 +18,9 @@ export default function App() {
       .catch(() => setHealth("down"));
   }, []);
 
-  function refreshShow() {
+  function refreshAll() {
     showRef.current?.refresh();
+    relRef.current?.refresh();
   }
 
   return (
@@ -30,10 +33,12 @@ export default function App() {
       </header>
 
       <div className="panel-grid">
-        <PdfPanel onIngested={refreshShow} />
-        <WebsitePanel onIngested={refreshShow} />
-        <DatabasePanel onIngested={refreshShow} />
+        <PdfPanel onIngested={refreshAll} />
+        <WebsitePanel onIngested={refreshAll} />
+        <DatabasePanel onIngested={refreshAll} />
       </div>
+
+      <RelationshipsPanel ref={relRef} />
 
       <ChatPanel />
 

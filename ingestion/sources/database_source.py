@@ -8,6 +8,10 @@ Also provides the pieces the text-to-SQL path needs at question time:
     sample_rows()         -- a few real rows, for few-shot prompting
     build_table_card()    -- row count + per-column stats (Option C fallback)
     run_readonly_query()  -- execute a generated SELECT, read-only, time-boxed
+
+...and the pieces relationship detection needs at ingest time:
+    get_foreign_keys()    -- declared FK constraints among a set of tables
+    sample_columns()      -- distinct values per column, for value-overlap matching
 """
 
 import hashlib
@@ -56,6 +60,61 @@ def list_table_names(conn_params: dict) -> list[str]:
 def source_id_for_table(host: str, dbname: str, table_name: str) -> str:
     key = f"db:{host}:{dbname}:{table_name}"
     return "db_" + hashlib.sha256(key.encode()).hexdigest()[:16]
+
+
+def get_foreign_keys(conn_params: dict, table_names: list[str]) -> list[dict]:
+    """Declared FOREIGN KEY constraints in the public schema where BOTH the
+    referencing and referenced table are in `table_names`.
+    """
+    conn = _connect(conn_params)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                select
+                  tc.table_name  as left_table,
+                  kcu.column_name as left_column,
+                  ccu.table_name  as right_table,
+                  ccu.column_name as right_column
+                from information_schema.table_constraints tc
+                join information_schema.key_column_usage kcu
+                  on tc.constraint_name = kcu.constraint_name and tc.table_schema = kcu.table_schema
+                join information_schema.constraint_column_usage ccu
+                  on ccu.constraint_name = tc.constraint_name and ccu.table_schema = tc.table_schema
+                where tc.constraint_type = 'FOREIGN KEY' and tc.table_schema = 'public'
+                """
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    names = set(table_names)
+    return [
+        {"left_table": lt, "left_column": lc, "right_table": rt, "right_column": rc}
+        for lt, lc, rt, rc in rows
+        if lt in names and rt in names
+    ]
+
+
+def sample_columns(conn_params: dict, table_name: str, columns: list[str], limit: int) -> dict[str, set]:
+    """{column_name: set of up to `limit` distinct non-null values}. One
+    connection, one query per column — used to compare value overlap across
+    tables when hunting for join keys.
+    """
+    conn = _connect(conn_params)
+    out: dict[str, set] = {}
+    try:
+        with conn.cursor() as cur:
+            for col in columns:
+                cur.execute(
+                    pg_sql.SQL("SELECT DISTINCT {c} FROM {t} WHERE {c} IS NOT NULL LIMIT %s").format(
+                        c=pg_sql.Identifier(col), t=pg_sql.Identifier(table_name)
+                    ),
+                    (limit,),
+                )
+                out[col] = {r[0] for r in cur.fetchall()}
+    finally:
+        conn.close()
+    return out
 
 
 def get_schema(conn_params: dict, table_name: str) -> list[dict]:
