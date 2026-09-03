@@ -10,10 +10,9 @@ class Settings(BaseSettings):
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     EMBED_MODEL: str = "nomic-embed-text"
     EMBED_NUM_CTX: int = 4096
-    # nomic-embed-text rejects (does not truncate) inputs over ~2048 tokens.
-    # Chunk text longer than this is truncated before embedding; the full text
-    # is still stored and used everywhere else.
-    EMBED_MAX_CHARS: int = 4000
+    # Cheap guard so we never POST a huge payload to Ollama; the precise
+    # token-level truncation is done by Ollama (embed(truncate=True)).
+    EMBED_MAX_CHARS: int = 8000
 
     # Chat / answer generation (Ollama, local)
     CHAT_MODEL: str = "llama3.2:3b"
@@ -32,6 +31,7 @@ class Settings(BaseSettings):
     SQL_ROW_LIMIT: int = 200  # hard LIMIT forced onto every generated query
     SQL_STATEMENT_TIMEOUT_MS: int = 5000  # Postgres statement_timeout per query
     SQL_RESULT_CHARS_MAX: int = 6000  # cap on result text fed back for phrasing
+    SQL_MAX_TABLES: int = 6  # table cards offered to the SQL model at once
 
     # Table card (Option C fallback): distinct values are listed for a text
     # column only when it has at most this many, and the rendered value list for

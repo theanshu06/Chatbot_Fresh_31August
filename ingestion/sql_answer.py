@@ -51,9 +51,20 @@ _PHRASE_SYSTEM = (
 )
 
 
-def _tables_block(tables: list[dict]) -> str:
+def _compact_schema(t: dict) -> str:
+    cols = ", ".join(f"{c['name']} ({c['type']})" for c in t.get("schema", []))
+    return f"Table: {t['label']} | Columns: {cols}"
+
+
+def _tables_block(tables: list[dict], full_sids: set[str]) -> str:
+    """Full card + sample rows for tables in `full_sids`; a one-line column list
+    for the rest (enough to JOIN against, without blowing the context window).
+    """
     blocks = []
     for t in tables:
+        if t["source_id"] not in full_sids:
+            blocks.append(_compact_schema(t))
+            continue
         lines = [t["card"]]
         if t.get("sample_rows"):
             lines.append("Sample rows:")
@@ -160,12 +171,26 @@ def try_sql(question: str, tables: list[dict], primary_source_id: str) -> dict:
         )
         return {"success": False, "sql_trace": trace}
 
-    # Offer the model every table that lives in the same database (join context).
-    join_tables = [
+    # Offer the model the primary table plus other same-database tables for JOIN
+    # context — but cap the count so many wide cards don't overflow SQL_NUM_CTX.
+    # Priority: tables with a confirmed relationship to the primary come first.
+    same_db = [
         t for t in tables
-        if (db_connections.get(t["source_id"]) or {}).get("dbname") == conn_params.get("dbname")
-    ] or [primary]
+        if t["source_id"] != primary["source_id"]
+        and (db_connections.get(t["source_id"]) or {}).get("dbname") == conn_params.get("dbname")
+    ]
+    related_sids = set()
+    for r in db_relationships.for_source_ids(
+        {primary["source_id"], *(t["source_id"] for t in same_db)}, only_confirmed=True
+    ):
+        related_sids |= {r["left_source_id"], r["right_source_id"]}
+    same_db.sort(key=lambda t: t["source_id"] not in related_sids)  # related first
+    join_tables = [primary, *same_db][: settings.SQL_MAX_TABLES]
     trace["tables_offered"] = [t["label"] for t in join_tables]
+
+    # Full card only for the primary + its confirmed-related tables; the rest get
+    # a one-line column list (enough to JOIN, cheap on context).
+    full_sids = {primary["source_id"], *related_sids}
 
     # Confirmed join relationships between the offered tables — the only hint the
     # model gets about how to connect them.
@@ -174,7 +199,7 @@ def try_sql(question: str, tables: list[dict], primary_source_id: str) -> dict:
     rel_block = _relationships_block(rels)
     trace["relationships_used"] = [_rel_condition(r) for r in rels]
 
-    user_prompt = f"{_tables_block(join_tables)}\n\n{rel_block}---\n\nQuestion: {question}"
+    user_prompt = f"{_tables_block(join_tables, full_sids)}\n\n{rel_block}---\n\nQuestion: {question}"
     messages = [
         {"role": "system", "content": _SQL_SYSTEM},
         {"role": "user", "content": user_prompt},
