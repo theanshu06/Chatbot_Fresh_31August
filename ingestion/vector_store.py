@@ -22,9 +22,13 @@ def get_collection():
 
 
 def embed(text: str) -> list[float]:
+    # nomic-embed-text hard-caps input at ~2048 tokens and errors (not truncates)
+    # if a chunk is longer — which happens for wide table cards that list every
+    # distinct value of many columns. Truncating here keeps the chunk findable
+    # (the full text is still stored as the document and shown to the SQL model).
     response = ollama.embeddings(
         model=settings.EMBED_MODEL,
-        prompt=text,
+        prompt=text[: settings.EMBED_MAX_CHARS],
         options={"num_ctx": settings.EMBED_NUM_CTX},
     )
     return response["embedding"]

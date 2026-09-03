@@ -190,6 +190,8 @@ def build_table_card(conn_params: dict, table_name: str, schema: list[dict]) -> 
                         )
                     )
                     values = ", ".join(str(v[0]) for v in cur.fetchall())
+                    if len(values) > settings.TABLE_CARD_VALUES_MAX_CHARS:
+                        values = values[: settings.TABLE_CARD_VALUES_MAX_CHARS] + ", …"
                     detail += f", values: [{values}]"
 
                 lines.append(f"  - {name} ({dtype}): {detail}")
